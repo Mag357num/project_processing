@@ -2,8 +2,7 @@ import csv
 import pymysql
 import pandas as pd
 import numpy as np
-from sklearn.datasets import load_iris
-import matplotlib.pyplot as plt
+
 
 #######连接数据库#######
 host = "127.0.0.1"
@@ -23,13 +22,10 @@ print("数据库连接成功")
 #######################################################################################
 
 #1.获取上周统计表子表
-conn2 = pymysql.connect(host=host,port = port,user=user,password=password,database=db_name)
-cur2 = conn2.cursor()
-
 sql = "select * from jd_action_cate where action_time>'2018-04-01' and action_time<'2018-04-09';"
-cur2.execute(sql)
-conn2.commit()
-action_tuple =cur2.fetchall()  #第上周行为总表
+cur.execute(sql)
+conn.commit()
+action_tuple =cur.fetchall()  #第上周行为总表
 print("上周行为表已获取")
 
 
@@ -55,9 +51,9 @@ print("行为统计字典已建立")
 
 #3.取出所有第二周下过单的用户用于完善行为统计字典中的paid键
 sql = "select * from jd_action_cate where action_time>'2018-04-08' and action_time<'2018-04-16' and type=2;"
-cur2.execute(sql)
-conn2.commit()
-bought_user_tuple = cur2.fetchall()   #第二周下单用户总表
+cur.execute(sql)
+conn.commit()
+bought_user_tuple = cur.fetchall()   #第二周下单用户总表
 
 for i in bought_user_tuple:   #查看上周有行为的用户是否在下周下单了，如果有，将paid置一
     if not statistics_dict.__contains__(i[0]):   #下周有新用户产生了购买
@@ -933,3 +929,5 @@ print("最终结果制表成功,congratulation!")
 #         f.write(",".join(l1))       #用join方法把列表中字符串再聚合在一起用write写入CSV文件
 #     if a =="":
 #         break
+
+
