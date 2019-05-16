@@ -1,0 +1,935 @@
+import csv
+import pymysql
+import pandas as pd
+import numpy as np
+from sklearn.datasets import load_iris
+import matplotlib.pyplot as plt
+
+#######连接数据库#######
+host = "127.0.0.1"
+port = 3306
+user = 'root'
+password = '123456'
+db_name = 'jd_data'
+conn = pymysql.connect(host=host,port = port,user=user,password=password,database=db_name)
+cur = conn.cursor()
+print("数据库连接成功")
+
+
+#######################################################################################
+##########一.获取周分析表（mysql）###########################################################
+##########若要改写周数，只需要改写查询时sql语句上的时间和写入时sql语句上的表名即可#################
+##########切记一定要改insert的sql语句#####################################################
+#######################################################################################
+
+#1.获取上周统计表子表
+conn2 = pymysql.connect(host=host,port = port,user=user,password=password,database=db_name)
+cur2 = conn2.cursor()
+
+sql = "select * from jd_action_cate where action_time>'2018-04-01' and action_time<'2018-04-09';"
+cur2.execute(sql)
+conn2.commit()
+action_tuple =cur2.fetchall()  #第上周行为总表
+print("上周行为表已获取")
+
+
+#2.建立行为统计字典
+statistics_dict = {}
+
+for i in action_tuple:
+    if not statistics_dict.__contains__(i[0]):   #如果统计字典中没有该user_id键
+        statistics_dict[i[0]]={}
+        if not statistics_dict[i[0]].__contains__(i[5]):    #如果统计字典user_id键下没有cate键
+            statistics_dict[i[0]][i[5]]={1:0,2:0,3:0,4:0,5:0,'paid':0}   #第一次建立某一个cate键时，将type计数器初始化为0
+            statistics_dict[i[0]][i[5]][i[4]] = statistics_dict[i[0]][i[5]][i[4]] + 1
+
+    else:  #如果有user
+        if not statistics_dict[i[0]].__contains__(i[5]):  # 如果统计字典user_id键下没有cate键
+            statistics_dict[i[0]][i[5]] = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0,'paid':0}  # 第一次建立某一个cate键时，将type计数器初始化为0
+            statistics_dict[i[0]][i[5]][i[4]] = statistics_dict[i[0]][i[5]][i[4]] + 1
+        else:  #如果有cate
+            statistics_dict[i[0]][i[5]][i[4]] = statistics_dict[i[0]][i[5]][i[4]] + 1
+
+print("行为统计字典已建立")
+
+
+#3.取出所有第二周下过单的用户用于完善行为统计字典中的paid键
+sql = "select * from jd_action_cate where action_time>'2018-04-08' and action_time<'2018-04-16' and type=2;"
+cur2.execute(sql)
+conn2.commit()
+bought_user_tuple = cur2.fetchall()   #第二周下单用户总表
+
+for i in bought_user_tuple:   #查看上周有行为的用户是否在下周下单了，如果有，将paid置一
+    if not statistics_dict.__contains__(i[0]):   #下周有新用户产生了购买
+        statistics_dict[i[0]] = {}
+        statistics_dict[i[0]][i[5]]={1:0,2:0,3:0,4:0,5:0,'paid':1}
+    if not statistics_dict[i[0]].__contains__(i[5]):   #如果下周用户下单了的商品是他上周没有对应对应行为的
+        statistics_dict[i[0]][i[5]]={1:0,2:0,3:0,4:0,5:0,'paid':1}
+    else:
+        statistics_dict[i[0]][i[5]]['paid'] = 1
+
+
+print("下周下单情况已插入上周行为表")
+
+
+
+
+#4.通过字典数据汇总出统计list表
+write_list_external = []   #建立一个空list用于插入数据
+write_list_internal = []
+
+for dict_user in statistics_dict:
+    for dict_cate in statistics_dict[dict_user]:
+        #write_list_internal = [user,cate,type1,type2,type3,type4,下单否]
+        write_list_internal = [dict_user,dict_cate,statistics_dict[dict_user][dict_cate][1],statistics_dict[dict_user][dict_cate][2],statistics_dict[dict_user][dict_cate][3],statistics_dict[dict_user][dict_cate][4],statistics_dict[dict_user][dict_cate][5],statistics_dict[dict_user][dict_cate]['paid']]
+        write_list_external.append(write_list_internal)
+
+print("行为总表已写入汇总list")
+for i in range(10):
+    print(write_list_external[i])
+
+#5.将汇总list导入数据库
+
+input_data=[]
+num = 0
+count = 0
+
+for i in write_list_external:
+    input_data.append(i)
+    num = num + 1
+    count = count + 1
+    if num == 5000:
+        sql = "insert into sta_revweek3_to_revweek2 VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"   #revweek3_revweek2 表示倒数的那几周
+        cur.executemany(sql,input_data)
+        conn.commit()
+        print("已经插入%s条数据" %count)
+        num = 0
+        input_data = []
+    if count == (len(write_list_external)//5000)*5000:
+        break
+
+for i in write_list_external[count:len(write_list_external)]:
+    input_data.append(i)
+    count = count + 1
+    sql = "insert into sta_revweek3_to_revweek2 VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+    cur.executemany(sql, input_data)
+    conn.commit()
+    input_data = []
+    print("已经插入%s条数据" % count)
+
+cur.close()
+print("行为总表已插入数据库")
+conn.close()
+
+
+
+# #######################################################################################
+# ##########一.（2）获取最后一周的行为表统计（mysql）##########################################
+# ##########若要改写周数，只需要改写查询时sql语句上的时间和写入时sql语句上的表名即可#################
+# ##########切记一定要改insert的sql语句#####################################################
+# #######################################################################################
+#
+# #1.获取周统计表子表
+# conn2 = pymysql.connect(host=host,port = port,user=user,password=password,database=db_name)
+# cur2 = conn2.cursor()
+#
+# sql = "select * from jd_action_cate where action_time>'2018-04-08' and action_time<'2018-04-16';"
+# cur2.execute(sql)
+# conn2.commit()
+# action_tuple =cur2.fetchall()  #第上周行为总表
+# print("上周行为表已获取")
+#
+#
+#2.建立行为统计字典
+# statistics_dict = {}
+#
+# for i in action_tuple:
+#     if not statistics_dict.__contains__(i[0]):   #如果统计字典中没有该user_id键
+#         statistics_dict[i[0]]={}
+#         if not statistics_dict[i[0]].__contains__(i[5]):    #如果统计字典user_id键下没有cate键
+#             statistics_dict[i[0]][i[5]]={1:0,2:0,3:0,4:0,5:0,'paid':0}   #第一次建立某一个cate键时，将type计数器初始化为0
+#             statistics_dict[i[0]][i[5]][i[4]] = statistics_dict[i[0]][i[5]][i[4]] + 1
+#
+#     else:  #如果有user
+#         if not statistics_dict[i[0]].__contains__(i[5]):  # 如果统计字典user_id键下没有cate键
+#             statistics_dict[i[0]][i[5]] = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0,'paid':0}  # 第一次建立某一个cate键时，将type计数器初始化为0
+#             statistics_dict[i[0]][i[5]][i[4]] = statistics_dict[i[0]][i[5]][i[4]] + 1
+#         else:  #如果有cate
+#             statistics_dict[i[0]][i[5]][i[4]] = statistics_dict[i[0]][i[5]][i[4]] + 1
+#
+# print("行为统计字典已建立")
+#
+#
+#
+# #3.通过字典数据汇总出统计list表
+# write_list_external = []   #建立一个空list用于插入数据
+# write_list_internal = []
+#
+# for dict_user in statistics_dict:
+#     for dict_cate in statistics_dict[dict_user]:
+#         #write_list_internal = [user,cate,type1,type2,type3,type4,下单否]
+#         write_list_internal = [dict_user,dict_cate,statistics_dict[dict_user][dict_cate][1],statistics_dict[dict_user][dict_cate][2],statistics_dict[dict_user][dict_cate][3],statistics_dict[dict_user][dict_cate][4],statistics_dict[dict_user][dict_cate][5],statistics_dict[dict_user][dict_cate]['paid']]
+#         write_list_external.append(write_list_internal)
+#
+# print("行为总表已写入汇总list")
+# for i in range(10):
+#     print(write_list_external[i])
+#
+#
+# #4.将汇总list导入数据库
+#
+# input_data=[]
+# num = 0
+# count = 0
+#
+# for i in write_list_external:
+#     input_data.append(i)
+#     num = num + 1
+#     count = count + 1
+#     if num == 5000:
+#         sql = "insert into final_action VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+#         cur.executemany(sql,input_data)
+#         conn.commit()
+#         print("已经插入%s条数据" %count)
+#         num = 0
+#         input_data = []
+#     if count == (len(write_list_external)//5000)*5000:
+#         break
+#
+# for i in write_list_external[count:len(write_list_external)]:
+#     input_data.append(i)
+#     count = count + 1
+#     sql = "insert into final_action VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+#     cur.executemany(sql, input_data)
+#     conn.commit()
+#     input_data = []
+#     print("已经插入%s条数据" % count)
+#
+# cur.close()
+# print("行为总表已插入数据库")
+# conn.close()
+
+
+
+############################################
+#####二.统计最受用户青睐的品类下店铺###############
+############################################
+
+#####1.统计最后一周每个用户查看的shop_id，出现次数最多的那个作为用户下单的shop#########
+
+####1.1获取最后一周用户对每个店铺的操作次数
+
+# conn2 = pymysql.connect(host=host,port = port,user=user,password=password,database=db_name)
+# cur2 = conn2.cursor()
+#
+# sql = "select * from jd_action_cate_shop where action_time>'2018-04-08' and action_time<'2018-04-16';"   #扩大此范围可能获取更有说服力的最青睐店铺
+# cur2.execute(sql)
+# conn2.commit()
+# action_tuple =cur2.fetchall()  #第上周行为总表
+#
+#
+# statistics_dict = {}
+# for i in action_tuple:
+#     if not statistics_dict.__contains__(i[0]):   #如果统计字典中没有该user_id键
+#         statistics_dict[i[0]]={}
+#         statistics_dict[i[0]][i[5]]={}   #没有user必定没有cate
+#         statistics_dict[i[0]][i[5]][i[6]]=1   #由于第一次建user-cate-shop_id，初始化为1
+#
+#     else:  #如果有user
+#         if not statistics_dict[i[0]].__contains__(i[5]):  # 判断user下有没有此次查询出现的cate
+#             #如果没有
+#             statistics_dict[i[0]][i[5]] = {}  # 建一个cate字典
+#             statistics_dict[i[0]][i[5]][i[6]]=1   #第一次建cate-shop_id，初始化为1
+#         else:  #如果有cate
+#             if not statistics_dict[i[0]][i[5]].__contains__(i[6]):  #是否有对应shop_id
+#                 statistics_dict[i[0]][i[5]][i[6]] = 1  # 第一次建shop，初始化为1
+#             else: #如果有shop_id
+#                 statistics_dict[i[0]][i[5]][i[6]] +=1
+#
+# print("'用户-品类-商铺'统计字典已建立")
+#
+#
+# #####1.2比较出用户最喜欢的店铺
+#
+#
+# for dict_user in statistics_dict:
+#     for dict_cate in statistics_dict[dict_user]:
+#         most_action_shop = 0  #每个品类下都有一个当前用户最青睐店铺，初始化最被青睐的店铺是被操作了0次的那个店铺
+#         favourate_shop = 0  #被操作最多的店铺名初始化为0
+#         for dict_shop in statistics_dict[dict_user][dict_cate]:
+#             if statistics_dict[dict_user][dict_cate][dict_shop]>most_action_shop:   #如果dict_shop店铺被操作次数大于most_action_shop
+#                 most_action_shop = statistics_dict[dict_user][dict_cate][dict_shop]   #就记住最大操作次数和对应的店名
+#                 favourate_shop = dict_shop
+#         else:
+#             statistics_dict[dict_user][dict_cate]['favourate'] = int(favourate_shop)    #每个cate下新建一个favourate键用于保存最被青睐店铺id
+#
+#
+# ####1.3将用户-品类-品类下最喜欢店铺关联起来插入list
+#
+# result_list_external = []  # 建立一个空list用于插入数据
+# result_list_internal = []
+#
+# for dict_user in statistics_dict:
+#     for dict_cate in statistics_dict[dict_user]:
+#         result_list_internal = [dict_user, dict_cate, statistics_dict[dict_user][dict_cate]['favourate']]
+#         result_list_external.append(result_list_internal)
+#
+#
+# print("行为总表已写入汇总list")
+#
+# print("展示:")
+# for i in range(10):
+#     print(result_list_external[i])
+#
+# #####1.4将处理结果插入mysql
+#
+# input_data=[]
+# num = 0
+# count = 0
+#
+# for i in result_list_external:
+#     input_data.append(i)
+#     num = num + 1
+#     count = count + 1
+#     if num == 5000:
+#         sql = "insert into corresponding_shop VALUES (%s,%s,%s)"   #revweek3_revweek2 表示倒数的那几周
+#         cur.executemany(sql,input_data)
+#         conn.commit()
+#         print("已经插入%s条数据" %count)
+#         num = 0
+#         input_data = []
+#     if count == (len(result_list_external)//5000)*5000:
+#         break
+#
+# for i in result_list_external[count:len(result_list_external)]:
+#     input_data.append(i)
+#     count = count + 1
+#     sql = "insert into corresponding_shop VALUES (%s,%s,%s)"
+#     cur.executemany(sql, input_data)
+#     conn.commit()
+#     input_data = []
+#     print("已经插入%s条数据" % count)
+#
+# cur.close()
+# print("对应商铺表已插入数据库")
+# conn.close()
+
+
+
+
+
+
+# ########################################
+# ##############三.科学计算部分#############
+# #########改sql语句即可###################
+# #######################################
+#
+#
+# ######1.导入上周数据用于训练出系数向量###########
+# sql = 'select * from sta_revweek3_to_revweek2;'
+# whole_df_lastweek = pd.read_sql(sql,conn)   #pandas数据对象
+# features_df_lastweek = whole_df_lastweek.loc[:,['cate','type1_count','type2_count','type3_count','type4_count','type5_count']]  #特征集
+# features_df_lastweek['bio'] = 1  #添加偏置项
+# #重新排序
+# features_df_lastweek=features_df_lastweek.reindex(columns=list(['bio','cate','type1_count','type2_count','type3_count','type4_count','type5_count']))
+# results_df_lastweek = whole_df_lastweek.loc[:,['paid']]  #结果集
+#
+# features_ndarray_lastweek = features_df_lastweek.values   #特征数据集
+# results_ndarray_lastweek = results_df_lastweek.values     #结果数据集
+#
+# X = features_ndarray_lastweek
+# y = results_ndarray_lastweek
+# print("上周数据已导入完毕，样本数为%s"%X.shape[0])
+#
+#
+#
+# # ######1.2.导入下周实际数据（用于测试学习效果）######
+# #
+# # sql = 'select * from sta_revweek3_to_revweek2;'
+# # whole_df_nextweek = pd.read_sql(sql,conn)   #pandas数据对象
+# # features_df_nextweek = whole_df_nextweek.loc[:,['cate','type1_count','type2_count','type3_count','type4_count','type5_count']]  #特征集
+# # features_df_nextweek['bio'] = 1  #添加偏置项
+# # #重新排序
+# # features_df_nextweek=features_df_nextweek.reindex(columns=list(['bio','cate','type1_count','type2_count','type3_count','type4_count','type5_count']))
+# # results_df_nextweek = whole_df_nextweek.loc[:,['paid']]  #结果集
+# #
+# # features_ndarray_nextweek = features_df_nextweek.values   #特征数据集
+# # results_ndarray_nextweek = results_df_nextweek.values     #结果数据集
+# #
+# # X_nextweek = features_ndarray_nextweek
+# # y_nextweek = results_ndarray_nextweek
+# # print("下周数据已导入完毕，样本数为%s"%X_nextweek.shape[0])
+#
+#
+# ######1.3.导入最后一周行为（用于最终预测）######
+#
+# sql = 'select * from final_action;'
+# whole_df_finalweek = pd.read_sql(sql,conn)   #pandas数据对象
+# features_df_finalweek = whole_df_finalweek.loc[:,['cate','type1_count','type2_count','type3_count','type4_count','type5_count']]  #特征集
+# features_df_finalweek['bio'] = 1  #添加偏置项
+# #重新排序
+# features_df_finalweek=features_df_finalweek.reindex(columns=list(['bio','cate','type1_count','type2_count','type3_count','type4_count','type5_count']))
+# results_df_finalweek = whole_df_finalweek.loc[:,['paid']]  #结果集,最终周的下周下单结果集全为零,因为未知
+#
+# features_ndarray_finalweek = features_df_finalweek.values   #特征数据集
+# results_ndarray_finalweek = results_df_finalweek.values     #结果数据集
+#
+# X_finalweek = features_ndarray_finalweek
+# y_finalweek = results_ndarray_finalweek
+# print("下周数据已导入完毕，样本数为%s"%X_finalweek.shape[0])
+#
+#
+#
+#
+#
+# ###########2.计算###########
+#
+# class logistic(object):   #该逻辑回归使用方式 1.先train 2.再predict
+#
+#     def __init__(self,X,y):
+#         self.W = None
+#         self.count = 0   #下降次数计数
+#         self.X = X
+#         self.y = y
+#         num_train, num_feature = self.X.shape
+#         self.h = np.ones([num_train,1])
+#
+#     def train(self, learn_rate=0.005, num_iters=10000):    #X为训练集特征值，y为输出实际值，learn_rate为学习速率，num_iters=5000为训练次数
+#         num_train, num_feature = self.X.shape     #num_train, num_feature：样本数，特征数
+#         self.W = 0.001 * np.random.randn(num_feature, 1).reshape((-1, 1))    #随机生成theta权重：对self.W进行初始化
+#         cast = []   #用于储存代价值
+#
+#
+#         for i in range(num_iters):
+#             error, dW = self.compute_cast()
+#             self.W += -learn_rate * dW    #更新theta值
+#             cast.append(error)
+#             self.count +=1
+#             if i % 100 == 0:
+#                 print('梯度下降次数为:%d,目前代价为:%f' % (i, error))
+#         self.count = 0
+#         return cast
+#
+#     def compute_cast(self):  #计算代价和偏导
+#         num_train = self.X.shape[0]   #从训练集X中获取样本数
+#         self.h = self.output()       #输入为X时特定theta下假说函数的输出，h：假说值
+#         if ([0] not in self.h) and ([1] not in self.h):
+#             cast = -np.sum((self.y * np.log10(self.h) + (1 - self.y) * np.log10(1 - self.h)))    #y为实际值
+#             cast = cast / num_train    #计算代价函数值
+#             dW = np.dot(self.X.T,(self.h - self.y)) / num_train   #梯度下降中的偏导项
+#         else:
+#             print("存在h=0或1")
+#             query_times = 0  #配合查找错误行
+#             for j in range(len(self.h)):   #找出错误项
+#                 if (self.h[query_times][0]==0) or (self.h[query_times][0]==1):
+#                     print("错误出在第",self.count,"次梯度下降; ","第",query_times,"项为",self.h[query_times][0],"; 此时删掉该行数据再求解cast和dw.")
+#                     # 删掉这一行使假说函数为1或者0的数据（过于极端的数据）
+#                     self.X = np.delete(self.X,query_times,axis=0)
+#                     print("已删掉X中该行，此时X中第",query_times,"行为:",self.X[query_times])
+#                     self.h = np.delete(self.h,query_times,axis=0)
+#                     print("已删掉h中该行，此时h中第", query_times, "行为:", self.h[query_times][0])
+#                     self.y = np.delete(self.y,query_times,axis=0)
+#                     print("已删掉y中该行，此时y中第", query_times, "行为:", self.y[query_times][0])
+#                 if ((query_times+1)<len(self.h)):   #必须当索引query_times小于h向量的长度时才能加一，这样就避免了h[j]这种检查元素的方法中可能的索引越界
+#                     query_times += 1
+#             else:
+#                 print("训练完毕，此时训练集还剩下%d个样本"%self.X.shape[0])
+#             cast = -np.sum((self.y * np.log10(self.h) + (1 - self.y) * np.log10(1 - self.h)))  # y为实际值
+#             cast = cast / self.X.shape[0]  # 计算代价函数值
+#             dW = np.dot(self.X.T, (self.h - self.y)) / self.X.shape[0]
+#
+#         return cast, dW
+#
+#
+#     def output(self):   #返回特定theta下以X为输入值的假说函数输出值
+#         g = np.dot(self.X, self.W)
+#         return self.sigmod(g)
+#
+#     def sigmod(self, x):
+#         return 1 / (1 + np.exp(-x))
+#
+#
+#     def output_predict(self,X_test):   #仅用于预测数据
+#         g = np.dot(X_test, self.W)
+#         return self.sigmod(g)
+#
+#     def predict(self, X_test):   #该预测函数必须要在训练完之后才能生成预期值
+#         h = self.output_predict(X_test)    #利用训练后优化的theta值来预测测试集的结果
+#         y_pred = np.where(h >= 0.5, 1, 0)
+#         return y_pred
+#
+# ############3.训练上周数据，获取行为预测参数##########
+#
+# analysis_lastweek = logistic(X,y)
+# analysis_lastweek.train()
+#
+# print("已获取最佳Θ参数矩阵:",analysis_lastweek.W)
+# print("完成对数据集X，与结果集y的一次逻辑回归")
+#
+# ###########4.与下周实际结果比对测试准确率########
+
+# y_predict = analysis_lastweek.predict(X_nextweek)  #获取下周预测值
+# print("预测完毕")
+#
+# percentage_count = 0  #计数器
+# for i in range(len(y_predict)):
+#     if i % 100000 ==0:
+#         print("y_nextweek[i]=",y_nextweek[i],"; y_predict[i]=",y_predict[i])
+#         print("此时已有%d个正确"%percentage_count)
+#     if y_nextweek[i]==y_predict[i]:
+#         percentage_count += 1
+# else:
+#     print(percentage_count)
+#
+# print(percentage_count)
+# print(len(y))
+# correct_percentage = percentage_count/len(y)
+# # print("预测正确率为: %f" %correct_percentage)
+#
+#
+#
+# ##########4.2.最终周行为预测目标周下单情况导入数据库############
+#
+# y_predict = analysis_lastweek.predict(X_finalweek)  #获取最周周预测值
+# print("预测完毕")
+# print("通过对%s条行为数据进行处理，预测出了%s条下单情况"%(X_finalweek.shape[0],y_predict.shape[0]))
+#
+#
+# input_data=[]
+# num = 0
+# count = 0
+# y_predict = y_predict.tolist()
+#
+# for i in y_predict:
+#     input_data.append(i)
+#     num = num + 1
+#     count = count + 1
+#     if num == 5000:
+#         sql = "insert into y_predict VALUES (%s)"
+#         cur.executemany(sql,input_data)
+#         conn.commit()
+#         print("已经插入%s条数据到y_predict" %count)
+#         num = 0
+#         input_data = []
+#     if count == (len(y_predict)//5000)*5000:
+#         break
+#
+# for i in y_predict[count:len(y_predict)]:
+#     input_data.append(i)
+#     count = count + 1
+#     sql = "insert into y_predict VALUES (%s)"
+#     cur.executemany(sql, input_data)
+#     conn.commit()
+#     input_data = []
+#     if count % 100 ==0:
+#         print("已经插入%s条数据到y_predict" % count)
+# else:
+#     print("已经插入%s条数据到y_predict" % count)
+#
+# cur.close()
+# print("y_predict向量已插入数据库")
+# conn.close()
+
+
+
+
+
+#####################################
+###########四.最终制表#################
+#####################################
+
+#########1.给预测结果汇总表predict_result添加shop_id列
+
+conn2 = pymysql.connect(host=host,port = port,user=user,password=password,database=db_name)
+cur2 = conn2.cursor()
+
+sql = "select * from predict_result;"
+cur2.execute(sql)
+conn2.commit()
+result_tuple =cur2.fetchall()
+print("行为表获取成功")
+
+sql = "select * from corresponding_shop;"
+cur2.execute(sql)
+conn2.commit()
+fill_shop_tuple =cur2.fetchall()
+print("最青睐店铺id获取成功获取成功")
+
+sql = "select * from y_predict;"
+cur2.execute(sql)
+conn2.commit()
+predict_tuple =cur2.fetchall()
+print("下单预测结果表获取成功")
+
+TF_test = len(result_tuple)==len(fill_shop_tuple) and len(result_tuple)==len(predict_tuple)
+print("三个表的长度一致吗？",TF_test)
+
+
+
+
+result_list = list(result_tuple)
+submit_list = []    #创建一个同维度列表
+dimension = np.array(result_list).shape
+
+for i in range(len(result_list)):
+    submit_list.append([])
+
+
+for i in range(len(result_list)):    #复制result_list中的内容
+    submit_list[i]=list(result_list[i])
+
+
+
+
+print('开始将预测所得下单情况和店铺id插入行为表...')
+
+for i in range(len(submit_list)):
+    submit_list[i][7]=predict_tuple[i][0]       #把用户对某一个cate最终下单的预测情况加入结果表
+    submit_list[i][8]=fill_shop_tuple[i][2]     #把用户user_id对于某个cate下最青睐的shop_id加入结果表
+    if i % 50000 ==0:
+        print("已经成功修改%d行"%i)
+    for j in range(5):    #将与type有关的列先删去
+        del submit_list[i][2]
+
+print("表已成功插入预测所得下单情况和店铺id，并删去了与type有关的列...")
+
+
+delete_count = 0
+for i in range(len(submit_list)):
+    if submit_list[delete_count][2] ==0:
+        del submit_list[delete_count]    #如果paid为0，那么删去这一整行，并且游标不加一
+        if delete_count % 10000 ==0:
+            print("delete_count=",delete_count)
+    else:
+        delete_count += 1   #如果paid为1那么检索下一行的paid
+        if delete_count % 10000 ==0:
+            print("delete_count=",delete_count)
+
+print("已经删去了所有paid=0的行，将删去paid列...")
+
+
+
+for i in range(len(submit_list)):
+    del submit_list[i][2]
+
+print("已获取只含有uer_id,cate,shop_id的表")
+
+
+###########将结果生成csv文件########
+
+
+submit_csv=open("submit.csv","w")
+
+submit_csv.write("user_id,cate,shop_id\n")
+
+for i in range(len(submit_list)):
+    for j in range(len(submit_list[i])):
+        submit_list[i][j]=str(submit_list[i][j])
+    submit_list[i] = ",".join(submit_list[i])
+    submit_list[i]=submit_list[i]+'\n'
+
+    submit_csv.write(submit_list[i])
+submit_csv.close()
+
+print("最终结果制表成功,congratulation!")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ###############################
+# #####CSV导入数据库###########
+# ###############################
+# path = "F:\\ShujieTechLaptop\\jdata\\jdata_product.csv"
+# data = []
+# num = 0
+# count = 0
+#
+# with open(path) as f:
+#     filename = csv.reader(f)
+#     next(filename)  #跳过表头
+#     filelist = list(filename)    #列表化大CSV时非常耗时
+#     for i in filelist:
+#         data.append(i)
+#         num = num + 1
+#         count = count + 1
+#         if num == 1000:
+#             sql = "insert into jd_product VALUES (%s,%s,%s,%s,%s)"
+#             cur.executemany(sql,data)
+#             conn.commit()
+#             print("已经插入%s条数据" %count)
+#             num = 0
+#             data = []
+#         if count == (len(filelist)//1000)*1000:
+#             break
+#
+#     for i in filelist[count:len(filelist)]:
+#         data.append(i)
+#         count = count + 1
+#         sql = "insert into jd_product VALUES (%s,%s,%s,%s,%s)"
+#         cur.executemany(sql, data)
+#         conn.commit()
+#         data = []
+#         print("已经插入%s条数据" % count)
+#
+# cur.close()
+# print("完成")
+# conn.close()
+
+
+
+
+
+# ############################################################################
+# ##########建立所需的新表（将cate加入jd_action生成 jd_action_cate)################
+# ############################################################################
+#
+# ###建立sku_id与cate关联的字典link#######
+#
+# conn3 = pymysql.connect(host=host,port = port,user=user,password=password,database=db_name)
+# cur3 = conn3.cursor()
+#
+# sql = "select * from jd_product;"
+# cur3.execute(sql)
+# conn3.commit()
+# link_tuple = cur3.fetchall()
+#
+# link={}
+# for i in link_tuple:  #用link字典把sku_id与cate链接了
+#     link[i[0]]=i[3]
+# print("关联字典创建完成")
+#
+#
+#
+# #######将带cate列的数据导入数据库#########必须与link字典一起运行
+# path = "F:\\ShujieTechLaptop\\jdata\\jdata_action.csv"
+#
+# data = [] #用于往数据库写值的列表
+# num = 0   #批量导入计数器
+# count = 0  #总次数计数器
+# deleted_sku = []  #已下架商品列表
+#
+# with open(path) as f:
+#     filename = csv.reader(f)
+#     next(filename) #跳过表头
+#
+#     print("开始list化")
+#     filelist = list(filename)   #大文件list化很耗时
+#     print("完成list化")
+#
+#
+# #上面读取csv的方法比较蠢，可以直接用open，readlines，write等方法操作csv，效率高多了
+# #上面的方法待更新
+#
+#     print("开始向数据库写值~~~~~~~~~~~~~~~~~~")
+#
+#     for i in filelist:
+#         if int(i[1]) in link:
+#             add_cate = link[int(i[1])]
+#             i.append(add_cate)   #添加cate列
+#         else:
+#             print("key %s do not exist"%int(i[1]))
+#             i.append(0)
+#             deleted_sku.append(int(i[1]))
+#
+#         data.append(i)
+#         num = num + 1
+#         count = count + 1
+#         if num == 5000:
+#             sql = "insert into jd_action_cate VALUES (%s,%s,%s,%s,%s,%s)"
+#             cur.executemany(sql,data)
+#             conn.commit()
+#             print("已经插入%s条数据" %count)
+#             num = 0
+#             data = []
+#         if count == (len(filelist)//5000)*5000:
+#             break
+#
+#     for i in filelist[count:len(filelist)]:
+#         if int(i[1]) in link:
+#             add_cate = link[int(i[1])]
+#             i.append(add_cate)  # 添加cate列
+#         else:
+#             print("key %s do not exist"%int(i[1]))
+#             i.append(0)
+#             deleted_sku.append(int(i[1]))
+#
+#         data.append(i)
+#         count = count + 1
+#         sql = "insert into jd_action_cate VALUES (%s,%s,%s,%s,%s,%s)"
+#         cur.executemany(sql, data)
+#         conn.commit()
+#         data = []
+#         print("已经插入%s条数据" % count)
+#
+#
+# f = open('deleted_sku.txt','w')   #保存已下架商品列表
+# f.write(str(deleted_sku))
+# f.close()
+#
+# cur.close()
+# print("完成")
+# conn.close()
+#
+
+
+
+
+
+# #########################################################################################
+# ##########建立所需的新表（将shop_id加入jd_action_cate生成 jd_action_cate_shop)################
+# #########################################################################################
+#
+# ###建立shop_id与sku_id关联的字典link#######
+#
+# conn3 = pymysql.connect(host=host,port = port,user=user,password=password,database=db_name)
+# cur3 = conn3.cursor()
+#
+# sql = "select * from jd_product;"
+# cur3.execute(sql)
+# conn3.commit()
+# link_tuple = cur3.fetchall()
+#
+# sku_shop_link={}
+# for i in link_tuple:  #用字典把sku_id与shop_id链接了
+#     sku_shop_link[i[0]]=i[2]
+# print("关联字典创建完成")
+#
+#
+# display_count = 0
+# for i in sku_shop_link:   #展示10个链接成果
+#     print(i,":",sku_shop_link[i])
+#     display_count+=1
+#     if display_count ==10:
+#         break
+#
+#
+#
+# #######建立带有shop_id的新表#########必须与link字典一起运行
+#
+# sql = 'select * from jd_action_cate limit 30000000,7214269;'
+# print("开始读数据...请稍后....")
+# action_cate_df = pd.read_sql(sql,conn)   #pandas数据对象
+# action_cate_nd = action_cate_df.values
+#
+#
+#
+# print("开始写值~~~~~~~~~~~~~~~~~~")
+#
+# deleted_sku = []  #已下架商品列表
+# data = []  #承接数据所用list
+# num = 0
+# count = 0
+# action_cate_list = action_cate_nd.tolist()  #ndarray无法使用每一种list操作，至少append就不行
+#
+# for i in action_cate_list:
+#     if int(i[1]) in sku_shop_link:   #如果在关联字典中有此sku_id，则将其对应的shop_id加入
+#         add_shop = sku_shop_link[int(i[1])]
+#         i.append(add_shop)   #添加shop列
+#
+#     else:
+#         # print("商品 %s 已下架"%int(i[1])) #有着一条时要打印非常多下架商品，很慢
+#         i.append(0)      #将已下架商品都归类为shop_id=0的店铺中（jd_product表中不存在shop_id=0的店铺)
+#         deleted_sku.append(int(i[1]))
+#
+#     data.append(i)
+#     num = num + 1
+#     count = count + 1
+#     if num == 5000:
+#         sql = "insert into jd_action_cate_shop VALUES (%s,%s,%s,%s,%s,%s,%s)"
+#         cur.executemany(sql,data)
+#         conn.commit()
+#         print("已经插入%s条数据" %count)
+#         num = 0
+#         data = []
+#     if count == (len(action_cate_list)//5000)*5000:
+#         break
+#
+# for i in action_cate_list[count:len(action_cate_list)]:
+#     if int(i[1]) in sku_shop_link:
+#         add_shop = sku_shop_link[int(i[1])]
+#         i.append(add_shop)  # 添加cate列
+#     else:
+#         # print("商品 %s 已下架" % int(i[1]))  #有着一条时要打印非常多下架商品，很慢
+#         i.append(0)  # 将已下架商品都归类为shop_id=0的店铺中（jd_product表中不存在shop_id=0的店铺)
+#         deleted_sku.append(int(i[1]))
+#
+#     data.append(i)
+#     count = count + 1
+#     sql = "insert into jd_action_cate_shop VALUES (%s,%s,%s,%s,%s,%s,%s)"
+#     cur.executemany(sql, data)
+#     conn.commit()
+#     data = []
+#     print("已经插入%s条数据" % count)
+#
+# print("有%d个商品已下架" %len(deleted_sku))
+# cur.close()
+# print("完成")
+# conn.close()
+
+
+
+
+
+
+
+
+
+
+
+
+# # # #######用字典统计次数（若键为字符串）########
+# # #
+# user_id = 1
+# cate = 1
+# count=12345
+# a["%s"%user_id]={"%s"%cate:count}
+# a["%s"%user_id]={"%s"%cate:count}
+# print(a["1"]["1"])
+#
+#
+# count_dict ={}
+#
+# for i in range(len(action_tuple)):
+#     if not count_dict.__contains__('%s'%action_tuple[i][0]):  #如果不存在则建立一个键
+#         count_dict["%s"%action_tuple[i][0]]={#cate键：次数}
+
+
+# #######读取CSV并修改字段后写入新CSV
+# f=open("jdata_product.csv","r")
+# a=f.readline()  #跳过表头
+# d={}
+# while True:    #准备好要添加的内容
+#     a=f.readline()
+#     if a=="":   #设置循环退出机制
+#         break
+#     a=a.split(",")    #用split方法分割字符串(CSV文件中内容都是以字符串形式保存的)
+#     d[a[0]]=a[3]
+# f.close()
+#
+# f=open("xin.csv","w")
+# f2=open("jdata_action.csv","r")
+# a=f2.readline()
+# while True:
+#     a=f2.readline()
+#     l1=a.split(",")
+#     if l1[1] in d:
+#         l1=l1[:2]+[d[l1[1]]]+l1[2:]
+#         f.write(",".join(l1))       #用join方法把列表中字符串再聚合在一起用write写入CSV文件
+#     if a =="":
+#         break
